@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Graceful Tree Labeling Game</title>
+<style>
+  body {
+    background-color: #222;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 0;
+  }
+  h1 {
+    margin-top: 10px;
+  }
+  #controls {
+    margin: 10px;
+  }
+  #status {
+    margin-top: 5px;
+  }
+  #rules {
+    background: rgba(255,255,255,0.1);
+    padding: 10px;
+    border-radius: 8px;
+    margin: 10px auto;
+    max-width: 600px;
+    text-align: left;
+  }
+  #toggleRules, #layoutToggle {
+    background: #444;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-bottom: 5px;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 10px auto;
+    background: #333;
+    border-radius: 10px;
+  }
+  .flashing {
+    animation: flash 0.5s alternate infinite;
+  }
+  @keyframes flash {
+    from { fill: yellow; }
+    to { fill: white; }
+  }
+  .congrats {
+    display: inline-block;
+    animation: bounce 1s infinite alternate;
+    font-weight: bold;
+  }
+  @keyframes bounce {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-5px); }
+  }
+</style>
+</head>
+<body>
+  <h1>Graceful Tree Labeling Game</h1>
+  <div id="controls">
+    <label for="nodeCount">Number of Nodes (5–10):</label>
+    <input type="number" id="nodeCount" min="5" max="10" value="5" />
+    <button id="startBtn">Start New Game</button>
+    <button id="pauseBtn">Pause/Save</button>
+    <button id="resumeBtn">Resume</button>
+    <button id="layoutToggle">Layout: Radial</button>
+  </div>
+  <button id="toggleRules">Hide Instructions</button>
+  <div id="rules">
+    <p>Select two nodes to swap their labels. Each edge label shows the absolute difference between its nodes’ labels. Continue until the edge labels are exactly 1..n-1 (a graceful labeling). You can pause, resume, or start new games. The timer and move count persist through pauses. You can also switch between Radial and Hierarchical layouts.</p>
+  </div>
+  <div id="status">
+    <span id="timer">Time: 0s</span> | <span id="moves">Moves: 0</span> | <span id="wins">Completed: 0</span> <span id="best">| Best: —</span> <span id="congrats"></span>
+  </div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const nodeCountInput = document.getElementById('nodeCount');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const layoutToggle = document.getElementById('layoutToggle');
+  const timerSpan = document.getElementById('timer');
+  const movesSpan = document.getElementById('moves');
+  const winsSpan = document.getElementById('wins');
+  const bestSpan = document.getElementById('best');
+  const congratsSpan = document.getElementById('congrats');
+  const toggleRulesBtn = document.getElementById('toggleRules');
+  const rulesDiv = document.getElementById('rules');
+
+  let nodes = [], edges = [], selected = [], moves = 0, timer = 0, timerInterval = null, paused = false, gameActive = false, wins = 0, best = {time: null, moves: null}, rulesVisible = true, layoutMode = 'radial';
+
+  function saveGame() {
+    const data = {nodes, edges, moves, timer, paused, gameActive, wins, best, nodeCount: parseInt(nodeCountInput.value), rulesVisible, layoutMode};
+    localStorage.setItem('gracefulTreeLabelingGame', JSON.stringify(data));
+  }
+
+  function loadGame() {
+    const saved = JSON.parse(localStorage.getItem('gracefulTreeLabelingGame'));
+    if (saved) {
+      ({nodes, edges, moves, timer, paused, gameActive, wins, best, rulesVisible, layoutMode} = saved);
+      nodeCountInput.value = saved.nodeCount;
+      rulesDiv.style.display = rulesVisible ? 'block' : 'none';
+      toggleRulesBtn.textContent = rulesVisible ? 'Hide Instructions' : 'Show Instructions';
+      layoutToggle.textContent = `Layout: ${layoutMode === 'radial' ? 'Radial' : 'Hierarchical'}`;
+      draw();
+      updateStatus();
+    }
+  }
+
+  function updateStatus() {
+    timerSpan.textContent = `Time: ${timer}s`;
+    movesSpan.textContent = `Moves: ${moves}`;
+    winsSpan.textContent = `Completed: ${wins}`;
+    if (best.time !== null) bestSpan.textContent = `| Best: ${best.time}s, ${best.moves} moves`;
+  }
+
+  function generateTree(n) {
+    let edges = [];
+    let available = [...Array(n).keys()];
+    let connected = [available.shift()];
+    while (available.length) {
+      const from = connected[Math.floor(Math.random()*connected.length)];
+      const to = available.shift();
+      edges.push([from,to]);
+      connected.push(to);
+    }
+    return edges;
+  }
+
+  function randomLabels(n) {
+    return [...Array(n).keys()].sort(()=>Math.random()-0.5);
+  }
+
+  function layoutNodesRadial(n) {
+    // ... same radial layout as before
+    const adj = Array.from({length:n}, () => []);
+    edges.forEach(e => { const a=e[0], b=e[1]; adj[a].push(b); adj[b].push(a); });
+    const parent = Array(n).fill(-1), children = Array.from({length:n}, () => []), depth = Array(n).fill(0);
+    const order = [0]; parent[0] = null;
+    for (let i=0;i<order.length;i++){
+      const u = order[i];
+      adj[u].forEach(v => { if (v===parent[u]) return; parent[v]=u; children[u].push(v); depth[v]=depth[u]+1; order.push(v); });
+    }
+    const sizes = Array(n).fill(0);
+    function computeSize(u){ let s=1; for(const c of children[u]) s+=computeSize(c); sizes[u]=s; return s; }
+    computeSize(0);
+    const maxDepth = Math.max(...depth);
+    const padding = 40;
+    const radialStep = Math.min((canvas.width - padding*2)/(2*(maxDepth+1)), (canvas.height - padding*2)/(2*(maxDepth+1))) || 80;
+    const cx = canvas.width/2, cy = canvas.height/2;
+    const positions = Array.from({length:n}, () => ({x:cx,y:cy}));
+    function assign(u, start, end){
+      const angle = (start+end)/2;
+      const r = (depth[u]+1)*radialStep;
+      positions[u].x = cx + r*Math.cos(angle);
+      positions[u].y = cy + r*Math.sin(angle);
+      if(children[u].length===0) return;
+      const total = sizes[u]-1;
+      let cur=start;
+      for(const c of children[u]){
+        const span=(sizes[c]/total)*(end-start);
+        assign(c, cur, cur+span);
+        cur+=span;
+      }
+    }
+    assign(0,0,Math.PI*2);
+    return positions;
+  }
+
+  function layoutNodesHierarchical(n) {
+    const adj = Array.from({length:n}, () => []);
+    edges.forEach(e => { const a=e[0], b=e[1]; adj[a].push(b); adj[b].push(a); });
+    const parent = Array(n).fill(-1), children = Array.from({length:n}, () => []), depth = Array(n).fill(0);
+    const order = [0]; parent[0] = null;
+    for (let i=0;i<order.length;i++){
+      const u = order[i];
+      adj[u].forEach(v => { if (v===parent[u]) return; parent[v]=u; children[u].push(v); depth[v]=depth[u]+1; order.push(v); });
+    }
+    const maxDepth = Math.max(...depth);
+    const layerHeight = canvas.height/(maxDepth+2);
+    const positions = Array.from({length:n}, ()=>({x:0,y:0}));
+    const layerNodes = [];
+    for (let i=0;i<=maxDepth;i++) layerNodes.push(order.filter(v => depth[v]===i));
+    for (let d=0; d<=maxDepth; d++){
+      const layer = layerNodes[d];
+      const step = canvas.width/(layer.length+1);
+      for (let i=0;i<layer.length;i++){
+        positions[layer[i]].x = (i+1)*step;
+        positions[layer[i]].y = (d+1)*layerHeight;
+      }
+    }
+    return positions;
+  }
+
+  function calcEdgeLabels() {
+    edges.forEach(e => e.label = Math.abs(nodes[e[0]].label - nodes[e[1]].label));
+  }
+
+  function draw() {
+    if (!nodes || nodes.length === 0) return;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    edges.forEach(e => {
+      const n1 = nodes[e[0]], n2 = nodes[e[1]];
+      ctx.beginPath(); ctx.moveTo(n1.x,n1.y); ctx.lineTo(n2.x,n2.y); ctx.stroke();
+      const mx=(n1.x+n2.x)/2, my=(n1.y+n2.y)/2;
+      const dx=n2.x-n1.x, dy=n2.y-n1.y, len=Math.sqrt(dx*dx+dy*dy)||1;
+      const offx=-dy/len*15, offy=dx/len*15;
+      ctx.font='16px Arial'; ctx.fillStyle='white'; ctx.strokeStyle='black'; ctx.lineWidth=3;
+      ctx.strokeText(e.label, mx+offx, my+offy);
+      ctx.fillText(e.label, mx+offx, my+offy);
+    });
+    nodes.forEach((n,i)=>{
+      ctx.beginPath(); ctx.arc(n.x,n.y,20,0,Math.PI*2);
+      ctx.fillStyle=selected.includes(i)?'yellow':'#555'; ctx.fill();
+      ctx.strokeStyle='white'; ctx.stroke();
+      ctx.font='16px Arial'; ctx.fillStyle='white'; ctx.strokeStyle='black'; ctx.lineWidth=3;
+      const text=String(n.label); const m=ctx.measureText(text);
+      ctx.strokeText(text, n.x-m.width/2, n.y+6);
+      ctx.fillText(text, n.x-m.width/2, n.y+6);
+    });
+  }
+
+  function isGraceful() {
+    const labels = edges.map(e => e.label).sort((a,b)=>a-b);
+    for (let i=1;i<=labels.length;i++) if (labels[i-1]!==i) return false;
+    return true;
+  }
+
+  function startTimer(){ if(timerInterval) clearInterval(timerInterval); timerInterval=setInterval(()=>{timer++; updateStatus(); saveGame();},1000); }
+  function stopTimer(){ clearInterval(timerInterval); }
+
+  function startGame(){
+    let n=parseInt(nodeCountInput.value);
+    do{
+      edges=generateTree(n);
+      nodes=Array.from({length:n},()=>({x:0,y:0,label:0}));
+      const positions = layoutMode==='radial'? layoutNodesRadial(n):layoutNodesHierarchical(n);
+      for(let i=0;i<n;i++){ nodes[i].x=positions[i].x; nodes[i].y=positions[i].y; }
+      const labels=randomLabels(n);
+      nodes.forEach((node,i)=>node.label=labels[i]);
+      calcEdgeLabels();
+    } while(isGraceful());
+    moves=0; timer=0; gameActive=true; paused=false;
+    congratsSpan.textContent=''; pauseBtn.disabled=false; resumeBtn.disabled=false;
+    updateStatus(); draw(); startTimer(); saveGame();
+  }
+
+  canvas.addEventListener('click', e=>{
+    if(!gameActive && !paused) return;
+    if(paused){paused=false; startTimer();}
+    const rect=canvas.getBoundingClientRect(); const x=e.clientX-rect.left, y=e.clientY-rect.top;
+    for(let i=0;i<nodes.length;i++){
+      const n=nodes[i]; if(Math.hypot(n.x-x,n.y-y)<20){
+        if(selected.includes(i)) selected=[]; else selected.push(i);
+        if(selected.length===2){
+          const[a,b]=selected; [nodes[a].label,nodes[b].label]=[nodes[b].label,nodes[a].label];
+          calcEdgeLabels(); moves++; selected=[];
+          if(isGraceful()){
+            stopTimer(); gameActive=false; pauseBtn.disabled=true; resumeBtn.disabled=true; wins++;
+            congratsSpan.innerHTML=`<span class='congrats'>Congratulations! You've completed ${wins} games!</span>`;
+            if(best.time===null || timer<best.time || (timer===best.time && moves<best.moves)) best={time:timer,moves:moves};
+          }
+          updateStatus(); saveGame();
+        }
+        break;
+      }
+    }
+    draw();
+  });
+
+  startBtn.onclick=startGame;
+  pauseBtn.onclick=()=>{paused=true; stopTimer(); saveGame();};
+  resumeBtn.onclick=()=>{if(!paused) return; paused=false; startTimer();};
+
+  layoutToggle.onclick=()=>{
+    layoutMode = layoutMode==='radial'? 'hierarchical':'radial';
+    layoutToggle.textContent=`Layout: ${layoutMode==='radial'?'Radial':'Hierarchical'}`;
+    const n=parseInt(nodeCountInput.value);
+    if(nodes.length===n){
+      const positions = layoutMode==='radial'? layoutNodesRadial(n):layoutNodesHierarchical(n);
+      for(let i=0;i<n;i++){nodes[i].x=positions[i].x; nodes[i].y=positions[i].y;}
+      draw();
+    }
+    saveGame();
+  };
+
+  toggleRulesBtn.onclick=()=>{
+    rulesVisible=!rulesVisible;
+    rulesDiv.style.display=rulesVisible?'block':'none';
+    toggleRulesBtn.textContent=rulesVisible?'Hide Instructions':'Show Instructions';
+    saveGame();
+  };
+
+  loadGame(); draw(); updateStatus();
+  </script>
+</body>
+</html>
